@@ -9,11 +9,13 @@
 //
 // The object's bytes come back in a ByteBuf made in the CALLER's region, and
 // that is the whole memory design: a caller walking fifty thousand objects
-// reads each one inside `region R { ... }` and everything that object cost --
-// the compressed bytes, the inflated delta, every base down its chain -- goes
-// back when the block ends. Nothing is cached across objects, so a delta whose
-// chain is fifty deep inflates fifty streams. That is the first measurement,
-// not the design's last word.
+// reads each one inside `region R { ... }`, and what that object cost goes back
+// when the block ends. Most of it does since Mere v0.1.559, when a region
+// parameter began to reach calls made from inner functions; what does not is
+// what no function's type names -- the inflater's tables, and the streams a
+// delta chain inflates and drops -- which Mere puts in the default region (the
+// README has the numbers). Nothing is cached across objects, so a delta whose
+// chain is fifty deep inflates fifty streams.
 //
 // Formats: gitformat-pack(5) -- idx v2 (fan-out, sorted ids, CRCs, 31-bit
 // offsets with a 64-bit overflow table), pack v2 entries (type and size in a

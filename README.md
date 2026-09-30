@@ -30,10 +30,24 @@ adds a real repository; the Mere compiler's own (15,869 objects,
 ## What it costs
 
 Each object is read inside a `region` block and nothing is cached across
-objects, so a delta fifty deep inflates fifty streams. On the Mere repository:
-54 s, and **1.9 GB peak RSS** -- the block does not get its memory back,
-because the allocations are made by functions it calls (Mere's Q-134: an
-allocation that does not appear in a function's type goes to the default
+objects, so a delta fifty deep inflates fifty streams. On the Mere repository
+(16,235 objects) that is about 43 s.
+
+Memory is counted by the runtime (`MERE_REGION_STATS=1`), not by peak RSS: on a
+busy macOS machine the peak of one binary on one input moved by a factor of three
+between runs, because what is never freed is larger than RAM and the compressor
+decides how much of it is resident.
+
+| built with Mere | given back as each object's block ends | in the default region, kept to the end |
+|---|---|---|
+| up to v0.1.558 | 1.8 GB | 33.7 GB |
+| v0.1.559 | 24.6 GB | 10.6 GB |
+
+v0.1.559 is where a region parameter began to reach calls made from inner
+functions, which is how `store_read` reaches its allocations. What is still in the
+default region is what no function's type names: the inflater's tables, and each
+stream `pack_read` inflates and drops on the way down a delta chain (Mere's Q-134:
+an allocation that does not appear in a function's type goes to the default
 region). Recorded as the reason, not worked around.
 
 Not implemented: writing anything, `status` (needs stat fields Mere does not
