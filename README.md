@@ -24,7 +24,7 @@ executable, a symlink, nested directories, a file rewritten a little per commit
 so that `git gc` stores it as deltas, and loose objects after the gc -- and
 compares every command with git. The object store's oracle is the whole of
 `git cat-file --batch-all-objects --batch`, byte for byte. `MGIT_BIG=<repo>`
-adds a real repository; the Mere compiler's own (about 16,000 objects,
+adds a real repository; the Mere compiler's own (15,869 objects,
 1.2 GB of content, delta chains 50 deep) is identical.
 
 ## What it costs
