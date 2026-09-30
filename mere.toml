@@ -1,0 +1,11 @@
+[package]
+name = "mgit"
+version = "0.1.0"
+path = "github.com/284km/mgit"
+
+[dependencies]
+mgz = { git = "https://github.com/284km/mgz", rev = "23ac233b36b745c9272c78bc07129c3849695fcc" }
+msha = { git = "https://github.com/284km/msha", rev = "819aad654879470bc2322356aafd51283a056ab9" }
+
+[test]
+run = ["sh verify.sh"]

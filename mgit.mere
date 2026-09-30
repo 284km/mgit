@@ -1,0 +1,246 @@
+// mgit — read a git repository the way git does, in pure Mere.
+//
+//   mgit [-C <dir>] cat-file -t|-s|-p <object>
+//   mgit [-C <dir>] cat-file --batch-all-objects   every object, sorted, as
+//                                                  `git cat-file --batch` prints it
+//   mgit [-C <dir>] rev-parse <ref>                HEAD, a branch, a tag, an id
+//   mgit [-C <dir>] log --first-parent [<ref>]     one id per line
+//   mgit [-C <dir>] rev-list --all                 every commit reachable from a ref
+//   mgit [-C <dir>] ls-tree -r <tree-ish>          `git ls-tree -r`
+//   mgit [-C <dir>] verify-ids                     every object's content hashed
+//                                                  again and compared with its id
+//
+// Everything is checked against git itself (verify.sh): the whole of
+// `git cat-file --batch-all-objects --batch`, byte for byte, is the oracle
+// for the object store.
+import "store.mere";
+import "msha/sha1.mere";
+
+// ---- small things ----------------------------------------------------------
+
+let out_str = fn (s: str) -> print_bytes (bytes_of_str s);
+
+let is_hex40 = fn (s: str) ->
+  str_len s == 40 && list_for_all (utf8_chars s) (fn (c: str) -> str_index_of "0123456789abcdef" c >= 0);
+
+// ---- refs ------------------------------------------------------------------------
+
+let gd = vec_new ();
+let gitdir = fn (u: unit) -> vec_get gd 0;
+
+// packed-refs lines: "<id> <ref>", and "^<id>" peeling the tag above it
+let packed_refs = fn (u: unit) ->
+  let p = gitdir () ++ "/packed-refs" in
+  if file_exists p == false then Nil
+  else
+    list_fold (str_split (read_file p) "\n") Nil (fn (acc: (str * str) list) -> fn (l: str) ->
+      if str_len l > 41 && str_starts_with l "#" == false && str_starts_with l "^" == false
+      then Cons ((substring l 41 (str_len l), substring l 0 40), acc) else acc);
+
+let rec resolve_ref = fn (name: str) -> fn (depth: int) ->
+  if depth > 10 then ""
+  else if is_hex40 name then name
+  else
+    let candidates = Cons (name, Cons ("refs/" ++ name, Cons ("refs/tags/" ++ name,
+                     Cons ("refs/heads/" ++ name, Cons ("refs/remotes/" ++ name, Nil))))) in
+    let rec try_ = fn (cs: str list) ->
+      match cs with
+      | Nil -> ""
+      | Cons (c, rest) ->
+        let path = gitdir () ++ "/" ++ c in
+        // a directory (refs/heads) is not a ref: reading it fails, and that is the answer
+        let v = if file_exists path then try_or (fn () -> str_trim (read_file path)) "" else "" in
+        if v != "" then
+          if str_starts_with v "ref: " then resolve_ref (substring v 5 (str_len v)) (depth + 1)
+          else v
+        else
+          match list_find (packed_refs ()) (fn (e: str * str) -> let (r, _) = e in r == c) with
+          | Some (_, id) -> id
+          | None -> try_ rest in
+    try_ candidates;
+
+// every ref (loose under refs/, and packed), as ids
+let rec walk_refs = fn (dir: str) -> fn (acc: str list) ->
+  list_fold (list_dir dir) acc (fn (a: str list) -> fn (e: str) ->
+    let p = dir ++ "/" ++ e in
+    let v = str_trim (read_file_or_dir p) in
+    if v == "<dir>" then walk_refs p a else if is_hex40 v then Cons (v, a) else a)
+
+and read_file_or_dir = fn (p: str) ->
+  // list_dir answers for a directory; a file's contents are a ref
+  if try_or (fn () -> let _ = list_dir p in true) false then "<dir>" else read_file p;
+
+let all_refs = fn (u: unit) ->
+  let loose = walk_refs (gitdir () ++ "/refs") Nil in
+  let packed = list_map (packed_refs ()) (fn (e: str * str) -> let (_, id) = e in id) in
+  let head = resolve_ref "HEAD" 0 in
+  list_append (if head == "" then Nil else Cons (head, Nil)) (list_append loose packed);
+
+// ---- objects -----------------------------------------------------------------
+
+// a commit's parents, and a tag's target (so a ref to a tag peels to a commit)
+let header_values = fn (body: str) -> fn (key: str) ->
+  let rec go = fn (ls: str list) -> fn (acc: str list) ->
+    match ls with
+    | Nil -> list_rev acc
+    | Cons (l, rest) ->
+      if l == "" then list_rev acc
+      else if str_starts_with l (key ++ " ") then go rest (Cons (substring l (str_len key + 1) (str_len l), acc))
+      else go rest acc in
+  go (str_split body "\n") Nil;
+
+// peel a tag chain to what it points at: (typ, id)
+let rec peel = fn (id: str) ->
+  let (t, first) = region Rp {
+    let (t, b) = store_read id in
+    if t == 4 then (t, match header_values (str_of_bytes (bytes_of_bytebuf b)) "object" with
+                       | Cons (o, _) -> o | Nil -> "")
+    else (t, "")
+  } in
+  if t == 4 then peel first else (t, id);
+
+let commit_parents = fn (id: str) ->
+  region Rc {
+    let (t, b) = store_read id in
+    if t != 1 then fail ("mgit: " ++ id ++ " is not a commit")
+    else header_values (str_of_bytes (bytes_of_bytebuf b)) "parent"
+  };
+
+let commit_tree = fn (id: str) ->
+  region Rc {
+    let (_t, b) = store_read id in
+    match header_values (str_of_bytes (bytes_of_bytebuf b)) "tree" with
+    | Cons (x, _) -> x
+    | Nil -> fail ("mgit: " ++ id ++ " has no tree")
+  };
+
+// tree entries: "<mode> <name>\0<20-byte id>" repeated
+type entry = { emode: str, ename: str, eid: str };
+
+let tree_entries = fn (b) ->
+  let n = bytebuf_len b in
+  let rec go = fn (p: int) -> fn (acc: entry list) ->
+    if p >= n then list_rev acc
+    else
+      let rec to = fn (q: int) -> fn (c: int) -> if bytebuf_get b q == c then q else to (q + 1) c in
+      let sp = to p 32 in
+      let z = to sp 0 in
+      let mode = str_of_bytes (bb_range b p (sp - p)) in
+      let name = str_of_bytes (bb_range b (sp + 1) (z - sp - 1)) in
+      let id = hex_of_bytes (bb_range b (z + 1) 20) in
+      go (z + 21) (Cons (entry { emode = mode, ename = name, eid = id }, acc)) in
+  go 0 Nil;
+
+let pad6 = fn (m: str) -> if str_len m < 6 then str_repeat "0" (6 - str_len m) ++ m else m;
+let kind_of_mode = fn (m: str) -> if m == "40000" then "tree" else if m == "160000" then "commit" else "blob";
+
+// ---- commands ------------------------------------------------------------------
+
+let cat_file = fn (flag: str) -> fn (obj: str) ->
+  let id = resolve_ref obj 0 in
+  if id == "" then let _ = print_err ("fatal: Not a valid object name " ++ obj) in 128
+  else
+    region Rf {
+      let (t, b) = store_read id in
+      if t == 0 then let _ = print_err ("fatal: Not a valid object name " ++ obj) in 128
+      else if flag == "-t" then let _ = print (type_name t) in 0
+      else if flag == "-s" then let _ = print (str_of_int (bytebuf_len b)) in 0
+      else if t == 2 then
+        let _ = list_iter (tree_entries b) (fn (e: entry) ->
+          out_str (pad6 e.emode ++ " " ++ kind_of_mode e.emode ++ " " ++ e.eid ++ "\t" ++ e.ename ++ "\n")) in 0
+      else let _ = print_bytes (bytes_of_bytebuf b) in 0
+    };
+
+let batch_all = fn (u: unit) ->
+  let _ = list_iter (store_all ()) (fn (id: str) ->
+    region Rb {
+      let (t, b) = store_read id in
+      let _ = out_str (id ++ " " ++ type_name t ++ " " ++ str_of_int (bytebuf_len b) ++ "\n") in
+      let _ = print_bytes (bytes_of_bytebuf b) in
+      out_str "\n"
+    }) in
+  0;
+
+// every object's id recomputed from its content: sha1("<type> <size>\0" ++ content)
+let verify_ids = fn (u: unit) ->
+  let ids = store_all () in
+  let bad = list_fold ids 0 (fn (acc: int) -> fn (id: str) ->
+    let ok = region Rv {
+      let (t, b) = store_read id in
+      let head = bytes_of_str (type_name t ++ " " ++ str_of_int (bytebuf_len b) ++ "_") in
+      // the header ends in a NUL, which a str literal cannot hold: build it
+      let hb = bytebuf_of_bytes head in
+      let _ = bytebuf_set hb (bytebuf_len hb - 1) 0 in
+      sha1_hex2 (bytes_of_bytebuf hb) (bytes_of_bytebuf b) == id
+    } in
+    if ok then acc else let _ = print ("mismatch " ++ id) in acc + 1) in
+  let _ = print (str_of_int (list_len ids) ++ " objects, " ++ str_of_int bad ++ " whose content does not hash to its id") in
+  if bad == 0 then 0 else 1;
+
+let log_first_parent = fn (start: str) ->
+  let rec go = fn (id: str) ->
+    let _ = print id in
+    match commit_parents id with
+    | Cons (p, _) -> go p
+    | Nil -> () in
+  let (_t, c) = peel (resolve_ref start 0) in
+  let _ = go c in
+  0;
+
+let rev_list_all = fn (u: unit) ->
+  let seen = map_new () in
+  let starts = list_fold (all_refs ()) Nil (fn (acc: str list) -> fn (r: str) ->
+    let (t, c) = peel r in if t == 1 then Cons (c, acc) else acc) in
+  let rec go = fn (stack: str list) ->
+    match stack with
+    | Nil -> ()
+    | Cons (c, rest) ->
+      if map_has seen c then go rest
+      else
+        let _ = map_set seen c 1 in
+        let _ = print c in
+        go (list_append (commit_parents c) rest) in
+  let _ = go starts in
+  0;
+
+let rec ls_tree = fn (id: str) -> fn (prefix: str) ->
+  let es = region Rt { let (_, b) = store_read id in tree_entries b } in
+  list_iter es (fn (e: entry) ->
+    if e.emode == "40000" then ls_tree e.eid (prefix ++ e.ename ++ "/")
+    else out_str (pad6 e.emode ++ " " ++ kind_of_mode e.emode ++ " " ++ e.eid ++ "\t" ++ prefix ++ e.ename ++ "\n"));
+
+let ls_tree_r = fn (ish: str) ->
+  let (t, id) = peel (resolve_ref ish 0) in
+  let tree = if t == 1 then commit_tree id else id in
+  let _ = ls_tree tree "" in
+  0;
+
+let usage = "usage: mgit [-C <dir>] cat-file -t|-s|-p <obj> | cat-file --batch-all-objects | rev-parse <ref> | log --first-parent [<ref>] | rev-list --all | ls-tree -r <tree-ish> | verify-ids";
+
+let find_git_dir = fn (dir: str) ->
+  if file_exists (dir ++ "/.git/objects") then dir ++ "/.git"
+  else if file_exists (dir ++ "/objects") && file_exists (dir ++ "/HEAD") then dir
+  else "";
+
+let main = fn () ->
+  let (dir, rest) = match args () with
+    | Cons ("-C", Cons (d, r)) -> (d, r)
+    | r -> (".", r) in
+  let g = find_git_dir dir in
+  if g == "" then let _ = print_err ("fatal: not a git repository: " ++ dir) in 128
+  else
+    let _ = vec_push gd g in
+    let _ = store_open g in
+    match rest with
+    | Cons ("cat-file", Cons ("--batch-all-objects", Nil)) -> batch_all ()
+    | Cons ("cat-file", Cons (flag, Cons (obj, Nil))) -> cat_file flag obj
+    | Cons ("rev-parse", Cons (r, Nil)) ->
+      let id = resolve_ref r 0 in
+      if id == "" then let _ = print_err ("fatal: bad revision " ++ r) in 128 else let _ = print id in 0
+    | Cons ("log", Cons ("--first-parent", Nil)) -> log_first_parent "HEAD"
+    | Cons ("log", Cons ("--first-parent", Cons (r, Nil))) -> log_first_parent r
+    | Cons ("rev-list", Cons ("--all", Nil)) -> rev_list_all ()
+    | Cons ("verify-ids", Nil) -> verify_ids ()
+    | Cons ("ls-tree", Cons ("-r", Cons (ish, Nil))) -> ls_tree_r ish
+    | _ -> let _ = print usage in 2;
+exit (main ())
