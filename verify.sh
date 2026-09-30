@@ -1,7 +1,7 @@
 #!/bin/sh
 # verify.sh — mgit against git itself.
 #
-#   MERE=/path/to/mere-checkout sh verify.sh [--poison]
+#   MERE=/path/to/mere.exe sh verify.sh [--poison]
 #   MGIT_BIG=/path/to/a/real/repo MERE=... sh verify.sh    also the whole of
 #                                                           a real repository
 #
@@ -28,8 +28,11 @@
 # must catch it.
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
-[ -n "${MERE:-}" ] || { echo "usage: MERE=/path/to/mere-checkout sh verify.sh" >&2; exit 2; }
-M="$MERE/_build/default/bin/mere.exe"
+# MERE is the compiler (the convention most verify.sh files follow) or a mere
+# checkout; either works. MERE_ROOT is the checkout when one can be found.
+[ -n "${MERE:-}" ] || { echo "usage: MERE=/path/to/mere.exe (or a mere checkout) sh verify.sh" >&2; exit 2; }
+if [ -d "$MERE" ]; then MERE_ROOT="$MERE"; M="$MERE/_build/default/bin/mere.exe"
+else M="$MERE"; MERE_ROOT="$(cd "$(dirname "$MERE")/../../.." 2>/dev/null && pwd)"; fi
 [ -x "$M" ] || { echo "verify: $M not found (dune build?)" >&2; exit 2; }
 command -v git >/dev/null || { echo "verify: git not found -- it is the oracle" >&2; exit 2; }
 [ -e "$DIR/.mere_modules/mgz/inflate.mere" ] && [ -e "$DIR/.mere_modules/msha/sha1.mere" ] \
