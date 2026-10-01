@@ -14,7 +14,9 @@
 // `git cat-file --batch-all-objects --batch`, byte for byte, is the oracle
 // for the object store.
 import "store.mere";
-import "msha/sha1.mere";
+// msha names itself github.com/284km/msha (its mere.toml), and `mere install` puts
+// it at that path; mgz has no mere.toml and is installed under its name.
+import "github.com/284km/msha/sha1.mere";
 
 // ---- small things ----------------------------------------------------------
 

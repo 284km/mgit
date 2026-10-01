@@ -42,16 +42,29 @@ decides how much of it is resident.
 |---|---|---|
 | up to v0.1.563 | 1.8 GB | 34.7 GB |
 | v0.1.564 | 24.8 GB | 11.5 GB |
+| v0.1.564, mgz `a3b818b` | 33.1 GB | 3.2 GB |
 
 (Mere repository at 17,505 objects.) Up to v0.1.563 most of it was in the default
 region because `store_read` reaches its allocations through an inner function of a
 `let rec ... and` group, which a region parameter did not reach, and because
 `let (out, _e, ok) = zlib_inflate raw hp in` generalised `out`'s region (ByteBuf was
 missing from the value restriction). Mere v0.1.564 fixed both. What is still in the
-default region is what no function's type names: the inflater's Huffman tables and
-bit readers, made and dropped inside `zlib_inflate` (Mere's Q-134: an allocation
-that does not appear in a function's type goes to the default region). Recorded as
-the reason, not worked around.
+default region is what no function's type names (Mere's Q-134: an allocation that
+does not appear in a function's type goes to the default region), and Mere
+v0.1.570's `mere -c --region-sites` names it by line:
+
+```
+region-stats default-site mgz/inflate.mere:341: alloc_total=8347724352
+region-stats default-site mgit/store.mere:210: alloc_total=1829840680
+region-stats default-site mgit/store.mere:176: alloc_total=297284136
+```
+
+The first was mgz's 64 KiB inflate window, made once per object; mgz `a3b818b`
+makes it inside a block of its own. The next two are this repository's:
+`store.mere:210` is a loose object's compressed bytes and the buffer they inflate
+into (`zlib_inflate`'s output is given that line's region), and `:176` is a pack
+entry's compressed bytes. Recorded, not yet moved -- what is read is returned,
+and a block cannot return a container.
 
 Not implemented: writing anything, `status` (needs stat fields Mere does not
 expose), SHA-256 repositories, multi-pack-index.

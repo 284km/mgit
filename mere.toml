@@ -4,7 +4,7 @@ version = "0.1.0"
 path = "github.com/284km/mgit"
 
 [dependencies]
-mgz = { git = "https://github.com/284km/mgz", rev = "23ac233b36b745c9272c78bc07129c3849695fcc" }
+mgz = { git = "https://github.com/284km/mgz", rev = "a3b818b3b264e8ac8509472f5de19390ff351ce3" }
 msha = { git = "https://github.com/284km/msha", rev = "819aad654879470bc2322356aafd51283a056ab9" }
 
 [test]

@@ -35,8 +35,8 @@ if [ -d "$MERE" ]; then MERE_ROOT="$MERE"; M="$MERE/_build/default/bin/mere.exe"
 else M="$MERE"; MERE_ROOT="$(cd "$(dirname "$MERE")/../../.." 2>/dev/null && pwd)"; fi
 [ -x "$M" ] || { echo "verify: $M not found (dune build?)" >&2; exit 2; }
 command -v git >/dev/null || { echo "verify: git not found -- it is the oracle" >&2; exit 2; }
-[ -e "$DIR/.mere_modules/mgz/inflate.mere" ] && [ -e "$DIR/.mere_modules/msha/sha1.mere" ] \
-  || { echo "verify: .mere_modules/mgz and .mere_modules/msha are needed (mere install)" >&2; exit 2; }
+[ -e "$DIR/.mere_modules/mgz/inflate.mere" ] && [ -e "$DIR/.mere_modules/github.com/284km/msha/sha1.mere" ] \
+  || { echo "verify: .mere_modules/mgz and .mere_modules/github.com/284km/msha are needed (mere install)" >&2; exit 2; }
 CC="${CC:-cc}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
