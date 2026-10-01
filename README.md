@@ -40,18 +40,18 @@ decides how much of it is resident.
 
 | built with Mere | given back as each object's block ends | in the default region, kept to the end |
 |---|---|---|
-| up to v0.1.558, and v0.1.560 | 1.8 GB | 33.7 GB |
-| v0.1.559 (withdrawn) | 24.6 GB | 10.6 GB |
+| up to v0.1.563 | 1.8 GB | 34.7 GB |
+| v0.1.564 | 24.8 GB | 11.5 GB |
 
-Most of it is in the default region because `store_read` reaches its allocations
-through inner functions, and a region parameter does not reach a call made from
-one (Mere's Q-134: an allocation that does not appear in a function's type goes to
-the default region). v0.1.559 made it reach them and showed what that is worth --
-the second row -- but did it by taking region polymorphism away from inner
-functions, and v0.1.560 withdrew it. The rest of the default region is what no
-function's type names at all: the inflater's tables, and each stream `pack_read`
-inflates and drops on the way down a delta chain. Recorded as the reason, not
-worked around.
+(Mere repository at 17,505 objects.) Up to v0.1.563 most of it was in the default
+region because `store_read` reaches its allocations through an inner function of a
+`let rec ... and` group, which a region parameter did not reach, and because
+`let (out, _e, ok) = zlib_inflate raw hp in` generalised `out`'s region (ByteBuf was
+missing from the value restriction). Mere v0.1.564 fixed both. What is still in the
+default region is what no function's type names: the inflater's Huffman tables and
+bit readers, made and dropped inside `zlib_inflate` (Mere's Q-134: an allocation
+that does not appear in a function's type goes to the default region). Recorded as
+the reason, not worked around.
 
 Not implemented: writing anything, `status` (needs stat fields Mere does not
 expose), SHA-256 repositories, multi-pack-index.
