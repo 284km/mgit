@@ -30,12 +30,15 @@ let pk_size = vec_new ();
 let pk_count = vec_new ();
 let pk_offs = vec_new ();
 
-// bytes [off, off+len) of a ByteBuf, as bytes
+// bytes [off, off+len) of a ByteBuf, as bytes. The scratch ByteBuf lives in a
+// block of its own: only the bytes leave it (bytes_of_bytebuf copies them out),
+// and as a plain allocation it was the largest thing left in the default region.
 let bb_range = fn (b) -> fn (off: int) -> fn (len: int) ->
-  let t = bytebuf_new 0 in
-  let rec go = fn (i: int) -> if i == len then () else let _ = bytebuf_push t (bytebuf_get b (off + i)) in go (i + 1) in
-  let _ = go 0 in
-  bytes_of_bytebuf t;
+  region T {
+    let t = bytebuf_new 0 in
+    let rec go = fn (i: int) -> if i == len then () else let _ = bytebuf_push t (bytebuf_get b (off + i)) in go (i + 1) in
+    let _ = go 0 in
+    bytes_of_bytebuf t };
 
 let git_dir = vec_new ();
 
@@ -207,18 +210,17 @@ and loose_read = fn (hex: str) ->
   let path = vec_get git_dir 0 ++ "/objects/" ++ substring hex 0 2 ++ "/" ++ substring hex 2 40 in
   if file_exists path == false then (0, bytebuf_new 0)
   else
-    let (out, _e, ok) = zlib_inflate (bytebuf_of_bytes (read_bytes path)) 0 in
-    let _ = if ok == false then fail ("mgit: loose object " ++ hex ++ " is not a good zlib stream") else () in
-    // "<type> <size>\0<content>"
-    let rec nul = fn (i: int) -> if bytebuf_get out i == 0 then i else nul (i + 1) in
-    let z = nul 0 in
-    let head = str_of_bytes (bb_range out 0 z) in
-    let sp = str_index_of head " " in
-    let typ = type_of_name (substring head 0 sp) in
-    let size = int_of_str (substring head (sp + 1) (str_len head)) in
-    let body = bytebuf_new 0 in
-    let rec copy = fn (i: int) -> if i == bytebuf_len out then () else let _ = bytebuf_push body (bytebuf_get out i) in copy (i + 1) in
-    let _ = copy (z + 1) in
+    let (typ, size, content) = region L {
+      let (out, _e, ok) = zlib_inflate (bytebuf_of_bytes (read_bytes path)) 0 in
+      let _ = if ok == false then fail ("mgit: loose object " ++ hex ++ " is not a good zlib stream") else () in
+      // "<type> <size>\0<content>"
+      let rec nul = fn (i: int) -> if bytebuf_get out i == 0 then i else nul (i + 1) in
+      let z = nul 0 in
+      let head = str_of_bytes (bb_range out 0 z) in
+      let sp = str_index_of head " " in
+      (type_of_name (substring head 0 sp), int_of_str (substring head (sp + 1) (str_len head)),
+       bb_range out (z + 1) (bytebuf_len out - z - 1)) } in
+    let body = bytebuf_of_bytes content in
     let _ = if bytebuf_len body != size then fail ("mgit: loose object " ++ hex ++ " is not the size its header says") else () in
     (typ, body)
 

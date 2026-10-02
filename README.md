@@ -43,8 +43,10 @@ decides how much of it is resident.
 | up to v0.1.563 | 1.8 GB | 34.7 GB |
 | v0.1.564 | 24.8 GB | 11.5 GB |
 | v0.1.564, mgz `a3b818b` | 33.1 GB | 3.2 GB |
+| the same, measured again at 17,983 objects | 33.4 GB | 3.5 GB |
+| a loose object and `bb_range` in blocks of their own | 35.3 GB | 2.3 GB |
 
-(Mere repository at 17,505 objects.) Up to v0.1.563 most of it was in the default
+(Mere repository at 17,505 objects, the last two rows at 17,983.) Up to v0.1.563 most of it was in the default
 region because `store_read` reaches its allocations through an inner function of a
 `let rec ... and` group, which a region parameter did not reach, and because
 `let (out, _e, ok) = zlib_inflate raw hp in` generalised `out`'s region (ByteBuf was
@@ -63,8 +65,21 @@ The first was mgz's 64 KiB inflate window, made once per object; mgz `a3b818b`
 makes it inside a block of its own. The next two are this repository's:
 `store.mere:210` is a loose object's compressed bytes and the buffer they inflate
 into (`zlib_inflate`'s output is given that line's region), and `:176` is a pack
-entry's compressed bytes. Recorded, not yet moved -- what is read is returned,
-and a block cannot return a container.
+entry's compressed bytes.
+
+A block cannot return a container, but it can return `bytes`, so a loose object
+is now read inside a block of its own (`region L`) and only its content leaves
+it, as bytes; and `bb_range`'s scratch ByteBuf -- the next largest, once that
+moved -- is made in a block too. The default region: 3.5 GB -> 2.3 GB, with
+identical output. What is left at the top:
+
+```
+region-stats default-site mgit/store.mere:223: alloc_total=661276472
+region-stats default-site mgit/store.mere:179: alloc_total=298263976
+```
+
+the loose object's content turned back into a ByteBuf for the caller, and a pack
+entry's compressed bytes.
 
 Not implemented: writing anything, `status` (needs stat fields Mere does not
 expose), SHA-256 repositories, multi-pack-index.
